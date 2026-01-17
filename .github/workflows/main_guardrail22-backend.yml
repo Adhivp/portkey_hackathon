@@ -72,10 +72,14 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_9592B23649684C78AC78AFA99A1BB874 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_25BCFA65F6F740A38A6BA5D0E24F9708 }}
 
+      - name: Zip artifact for deployment
+        run: zip -r release.zip . -x '*.git*'
+
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
         with:
           app-name: 'guardrail22-backend'
           slot-name: 'Production'
+          package: release.zip
           
