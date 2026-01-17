@@ -6,7 +6,10 @@ from enum import Enum
 try:
     from .service import Guardrail
 except ImportError:
-    from service import Guardrail
+    try:
+        from service import Guardrail
+    except ImportError:
+        from guardrail.service import Guardrail
 import contextlib
 
 # Global instance
