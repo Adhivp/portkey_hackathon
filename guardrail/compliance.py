@@ -163,9 +163,52 @@ Add specific evidence strings to the evidence arrays for identified risks."""
             logger.error(f"Error creating query embedding: {e}")
             return None
 
+
+    def add_policy(self, text: str, category: str = "Internal"):
+        """
+        Add a new policy to the Azure Search index.
+        """
+        if not self.search_endpoint or not self.search_key:
+            return False
+
+        logger.info(f"Adding new policy to category: {category}")
+
+        try:
+            # Generate embedding
+            embedding = self.create_embedding(text)
+            if not embedding:
+                logger.error("Failed to create embedding for new policy")
+                return False
+
+            search_client = SearchClient(
+                endpoint=self.search_endpoint,
+                index_name=self.index_name,
+                credential=AzureKeyCredential(self.search_key)
+            )
+
+            # Create document
+            # using uuid for unique id
+            from uuid import uuid4
+            doc = {
+                "chunk_id": str(uuid4()),
+                "content": text,
+                "category": category,
+                "embedding": embedding,
+                "chunk_index": 0 # Default
+            }
+
+            search_client.upload_documents(documents=[doc])
+            logger.info("Successfully uploaded new policy document")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error adding policy: {e}")
+            return False
+
     def search_policies(self, query_embedding, top_k=5):
         """
         Search Azure AI Search index using vector search.
+        Ensures Internal category is always checked by performing a dedicated search.
         """
         if not self.search_endpoint or not self.search_key:
             return []
@@ -183,41 +226,54 @@ Add specific evidence strings to the evidence arrays for identified risks."""
             if not isinstance(query_embedding, list):
                 query_embedding = list(query_embedding)
             
-            # Create vector query
+            # 1. Main Search (General)
             vector_query = VectorizedQuery(
                 vector=query_embedding,
                 k_nearest_neighbors=top_k,
                 fields="embedding"
             )
             
-            # We are not applying category filter here as per current requirement integration, 
-            # or maybe we should passthrough? The user prompt had it. 
-            # I will omit 'filter' for now or default to all, as step 1 integration only mentioned check_regional_compliance returning dict.
-            # Adding category filtering would require knowing which category to filter for, 
-            # but check_regional_compliance needs to return status for ALL regions effectively.
-            # Actually, the user's `check_regional_compliance` signature was `(prompt: str) -> dict`.
-            # And it returned status for USA, EU, India, Internal.
-            # So likely we need to NOT filter by category during search to get policies for ALL regions, 
-            # OR we rely on LLM2 to figure it out from context.
-            # The original code allowed filtering but default was "all". I'll use no filter (equivalent to all).
-
-            results = search_client.search(
+            main_results = search_client.search(
                 search_text=None,
                 vector_queries=[vector_query],
                 top=top_k,
-                select=["chunk_id", "content", "chunk_index"],
+                select=["chunk_id", "content", "category", "chunk_index"],
+                include_total_count=True
+            )
+
+            # 2. Internal Category Search (Dedicated)
+            # We want to make sure we find relevant Internal policies even if they aren't in total top K
+            internal_vector_query = VectorizedQuery(
+                vector=query_embedding,
+                k_nearest_neighbors=3, # Fetch top 3 relevant internal policies
+                fields="embedding"
+            )
+            
+            internal_results = search_client.search(
+                search_text=None,
+                vector_queries=[internal_vector_query],
+                filter="category eq 'Internal'",
+                top=3,
+                select=["chunk_id", "content", "category", "chunk_index"],
                 include_total_count=True
             )
             
+            # Merge results, removing duplicates by chunk_id
+            seen_ids = set()
             retrieved_docs = []
-            for result in results:
-                doc = {
-                    "chunk_id": result.get("chunk_id"),
-                    "content": result.get("content"),
-                    "chunk_index": result.get("chunk_index"),
-                    "score": result.get("@search.score")
-                }
-                retrieved_docs.append(doc)
+            
+            for res_list in [main_results, internal_results]:
+                for result in res_list:
+                    if result.get("chunk_id") not in seen_ids:
+                        seen_ids.add(result.get("chunk_id"))
+                        doc = {
+                            "chunk_id": result.get("chunk_id"),
+                            "content": result.get("content"),
+                            "category": result.get("category"),
+                            "chunk_index": result.get("chunk_index"),
+                            "score": result.get("@search.score")
+                        }
+                        retrieved_docs.append(doc)
             
             return retrieved_docs
         
