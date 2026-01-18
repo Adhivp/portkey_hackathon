@@ -1,13 +1,16 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 import requests
 import ipaddress
 from enum import Enum
-from typing import Optional
+from typing import Optional, Dict, Any
 import os
 from portkey_ai import Portkey
+import contextlib
+
 try:
     from .service import Guardrail
 except ImportError:
@@ -15,7 +18,6 @@ except ImportError:
         from service import Guardrail
     except ImportError:
         from guardrail.service import Guardrail
-import contextlib
 
 # Global instance
 guardrail_service = None
@@ -31,6 +33,7 @@ app = FastAPI(title="Guardrail22 - AI Security Gateway", lifespan=lifespan)
 # Setup templates
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
 
+# Pydantic models
 class Prompt(BaseModel):
     prompt: str
 
@@ -46,12 +49,14 @@ class RegionCategory(str, Enum):
     EU = "EU"
     OTHERS = "Others"
 
-# List of EU country codes (approximate)
+# List of EU country codes
 EU_COUNTRIES = {
-    "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE"
+    "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU", 
+    "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE"
 }
 
 def get_public_ip():
+    """Get the public IP address"""
     try:
         response = requests.get("https://api.ipify.org?format=json", timeout=5)
         response.raise_for_status()
@@ -60,6 +65,7 @@ def get_public_ip():
         return None
 
 def determine_category(country_code: str) -> RegionCategory:
+    """Determine region category based on country code"""
     if not country_code:
         return RegionCategory.OTHERS
     
@@ -99,16 +105,15 @@ try:
 except Exception as e:
     print(f"Warning: Portkey client initialization failed: {e}")
 
-# ==================== ROUTES ====================
-
+# Routes
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     """Serve the main UI page"""
     return templates.TemplateResponse("index.html", {"request": request})
 
-@app.post("/analyze")
-async def analyze_prompt_legacy(prompt: Prompt, request: Request):
-    """Legacy analyze endpoint (kept for backward compatibility)"""
+@app.post("/api/analyze")
+async def analyze_prompt(prompt: Prompt, request: Request):
+    """Analyze a prompt through the guardrail system"""
     client_host = request.client.host
     
     # Check if IP is private or loopback
@@ -139,46 +144,6 @@ async def analyze_prompt_legacy(prompt: Prompt, request: Request):
         "region_category": category.value,
         "guardrail_results": guardrail_results
     }
-
-@app.post("/api/analyze")
-async def analyze_prompt(prompt: Prompt, request: Request):
-    client_host = request.client.host
-    
-    # Check if IP is private or loopback
-    ip_to_check = client_host
-    try:
-        ip_obj = ipaddress.ip_address(client_host)
-        if ip_obj.is_private or ip_obj.is_loopback:
-            public_ip = get_public_ip()
-            if public_ip:
-                ip_to_check = public_ip
-    except ValueError:
-        pass # Invalid IP format
-    
-    country_code = None
-    country_name = "Unknown"
-    
-    try:
-        # Request fields: status, country, countryCode, regionName
-        response = requests.get(f"http://ip-api.com/json/{ip_to_check}")
-        response.raise_for_status()
-        geoip_data = response.json()
-        
-        if geoip_data.get("status") == "success":
-             country_code = geoip_data.get("countryCode")
-             country_name = geoip_data.get("country", "Unknown")
-             
-    except requests.RequestException:
-        pass # Maintain defaults
-    
-    category = determine_category(country_code)
-    
-    # Run Guardrail checks
-    if guardrail_service:
-        guardrail_results = await guardrail_service.validate(prompt.prompt, region=category.value)
-    else:
-        guardrail_results = {"error": "Guardrail service not initialized"}
-
 
 @app.post("/api/ai/chat")
 async def ai_chat(ai_request: AIRequest, request: Request):
@@ -288,7 +253,6 @@ async def health_check():
         "guardrail_service": "active" if guardrail_service else "inactive",
         "portkey_client": "active" if portkey_client else "inactive"
     }
-
 
 if __name__ == "__main__":
     import uvicorn

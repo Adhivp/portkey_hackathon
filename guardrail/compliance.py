@@ -84,6 +84,12 @@ Add specific evidence strings to the evidence arrays for identified risks."""
             # Note: Portkey might look like OpenAI client structure
             llm1_output = response.choices[0].message.content
             logger.info("LLM1 Response received")
+            logger.debug(f"LLM1 Raw Response: {llm1_output}")
+            
+            # Check if response is empty
+            if not llm1_output or not llm1_output.strip():
+                logger.error("LLM1 returned empty response")
+                return self._get_default_assessment()
             
             # Extract JSON from markdown if present
             json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', llm1_output, re.DOTALL)
@@ -93,12 +99,44 @@ Add specific evidence strings to the evidence arrays for identified risks."""
                 json_str = llm1_output
             
             # Parse JSON response
-            assessment = json.loads(json_str.strip())
-            return assessment
+            try:
+                assessment = json.loads(json_str.strip())
+                return assessment
+            except json.JSONDecodeError as json_err:
+                logger.error(f"Failed to parse LLM1 JSON response: {json_err}")
+                logger.error(f"Response content: {llm1_output}")
+                return self._get_default_assessment()
         
         except Exception as e:
             logger.error(f"Error calling LLM1: {e}")
-            return None
+            return self._get_default_assessment()
+    
+    def _get_default_assessment(self):
+        """Return a safe default assessment when LLM fails"""
+        return {
+            "risk_assessment": {
+                "biometric_processing": False,
+                "surveillance": False,
+                "real_time_tracking": False,
+                "privacy_invasion": False,
+                "extortion_or_coercion": False,
+                "reidentification": False,
+                "children_data": False,
+                "sensitive_attribute_inference": False
+            },
+            "data_classification": {
+                "personal_data": False,
+                "sensitive_data": False,
+                "biometric_data": False
+            },
+            "evidence": {
+                "biometric_processing": [],
+                "surveillance": [],
+                "privacy_invasion": [],
+                "extortion_or_coercion": [],
+            "reidentification": []
+            }
+        }
 
     def generate_search_query(self, assessment):
         """
@@ -345,6 +383,12 @@ Determine compliance status for EU, USA, India, and Internal policies."""
             
             llm2_output = response.choices[0].message.content
             logger.info("LLM2 Response received")
+            logger.debug(f"LLM2 Raw Response: {llm2_output}")
+            
+            # Check if response is empty
+            if not llm2_output or not llm2_output.strip():
+                logger.error("LLM2 returned empty response")
+                return self._get_default_compliance()
             
             # Extract JSON from markdown if present
             json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', llm2_output, re.DOTALL)
@@ -354,12 +398,32 @@ Determine compliance status for EU, USA, India, and Internal policies."""
                 json_str = llm2_output
             
             # Parse JSON response
-            compliance = json.loads(json_str.strip())
-            return compliance
+            try:
+                compliance = json.loads(json_str.strip())
+                return compliance
+            except json.JSONDecodeError as json_err:
+                logger.error(f"Failed to parse LLM2 JSON response: {json_err}")
+                logger.error(f"Response content: {llm2_output}")
+                return self._get_default_compliance()
         
         except Exception as e:
             logger.error(f"Error calling LLM2: {e}")
-            return None
+            return self._get_default_compliance()
+    
+    def _get_default_compliance(self):
+        """Return a safe default compliance result when LLM fails"""
+        return {
+            "EU": "unchecked",
+            "USA": "unchecked",
+            "India": "unchecked",
+            "Internal": "unchecked",
+            "reasoning": {
+                "EU": "Unable to assess compliance due to system error",
+                "USA": "Unable to assess compliance due to system error",
+                "India": "Unable to assess compliance due to system error",
+                "Internal": "Unable to assess compliance due to system error"
+            }
+        }
 
     def check_regional_compliance(self, prompt: str) -> dict:
         """
